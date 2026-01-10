@@ -35,7 +35,7 @@ pipeline {
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('sonarqube_server') {   // ← must match Jenkins SonarQube installation name
+                withSonarQubeEnv('sonar') {   // ← must match Jenkins SonarQube installation name
                     sh '''
                         ${SCANNER_HOME}/bin/sonar-scanner \
                         -Dsonar.projectKey=ncodeit \
