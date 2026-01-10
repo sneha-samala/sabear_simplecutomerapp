@@ -2,51 +2,60 @@ pipeline {
     agent any
     
     tools {
-        maven 'MVN_HOME'           // Must match the exact name configured in Global Tool Configuration
-        // sonar_scanner is used via withSonarQubeEnv, no need to declare as tool here
+        maven 'MVN_HOME'                    // Must match name in Global Tool Configuration
+        sonarscanner 'sonar-scanner'        // ← IMPORTANT: Add this! Must match the Name you set in SonarQube Scanner installations
     }
 
     environment {
         // Nexus Configuration
-        NEXUS_VERSION     = 'nexus3'
-        NEXUS_PROTOCOL    = 'http'
-        NEXUS_URL         = '15.207.103.131:8081'          // no trailing slash
-        NEXUS_REPOSITORY  = 'simple_customerapp'                    // ← is this really the target repo name?
+        NEXUS_VERSION       = 'nexus3'
+        NEXUS_PROTOCOL      = 'http'
+        NEXUS_URL           = '15.207.103.131:8081'       // no trailing slash
+        NEXUS_REPOSITORY    = 'simple_customerapp'        // confirm this repo exists in Nexus
         NEXUS_CREDENTIAL_ID = 'nexus-server'
 
-        // You can also define these if you want to make them more visible
-        ARTIFACT_DIR      = 'target'
+        ARTIFACT_DIR        = 'target'
     }
 
     stages {
-
         stage('Clone Repository') {
             steps {
                 git url: 'https://github.com/sneha-samala/sabear_simplecutomerapp.git',
-                    branch: 'master'   // ← add branch if not default
+                    branch: 'master'
             }
         }
 
-        stage('Build with Maven') {
+        stage('Build & Test with Maven') {
             steps {
-                sh 'mvn clean install -DskipTests'   // skipping tests is cleaner than ignore failure
+                // Changed to 'verify' to run tests + generate JaCoCo report
+                sh 'mvn clean verify'
+                // If you really want to skip tests → use: mvn clean install -DskipTests
             }
         }
 
         stage('SonarQube Analysis') {
             steps {
-                withSonarQubeEnv('sonar') {   // ← must match Jenkins SonarQube installation name
-                    sh '''
-                        sonar-scanner \
-                        -Dsonar.projectKey=ncodeit \
-                        -Dsonar.projectName="Ncodeit Project" \
-                        -Dsonar.projectVersion=${BUILD_NUMBER} \
-                        -Dsonar.sources=src/main/java \
-                        -Dsonar.java.binaries=target/classes \
-                        -Dsonar.tests=src/test/java \
-                        -Dsonar.junit.reportsPath=target/surefire-reports \
-                        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
-                    '''
+                script {
+                    // Option 1: Recommended - Jenkins auto-resolves the scanner path
+                    withSonarQubeEnv('sonar') {   // 'sonar' = name of your SonarQube server config
+                        sh '''
+                            sonar-scanner \
+                            -Dsonar.projectKey=ncodeit \
+                            -Dsonar.projectName="Ncodeit Project" \
+                            -Dsonar.projectVersion=${BUILD_NUMBER} \
+                            -Dsonar.sources=src/main/java \
+                            -Dsonar.java.binaries=target/classes \
+                            -Dsonar.tests=src/test/java \
+                            -Dsonar.junit.reportsPath=target/surefire-reports \
+                            -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                        '''
+                    }
+
+                    // Alternative (more explicit - use if above fails):
+                    // def scannerHome = tool 'sonar-scanner'
+                    // withSonarQubeEnv('sonar') {
+                    //     sh "${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=..."
+                    // }
                 }
             }
         }
@@ -57,20 +66,18 @@ pipeline {
             }
             steps {
                 script {
-                    // Read POM once
                     def pom = readMavenPom file: 'pom.xml'
                     
-                    // Find the main artifact (jar/war/etc)
                     def artifactFiles = findFiles(glob: "${ARTIFACT_DIR}/*.${pom.packaging}")
                     
                     if (artifactFiles?.size() > 0) {
                         def mainArtifact = artifactFiles[0]
                         
-                        echo "Uploading artifact: ${mainArtifact.name}"
-                        echo "→ Group: ${pom.groupId}"
-                        echo "→ Artifact: ${pom.artifactId}"
-                        echo "→ Version: ${pom.version}"
-                        echo "→ Type: ${pom.packaging}"
+                        echo "Uploading artifact → ${mainArtifact.name}"
+                        echo "GroupId    : ${pom.groupId}"
+                        echo "ArtifactId : ${pom.artifactId}"
+                        echo "Version    : ${pom.version}"
+                        echo "Packaging  : ${pom.packaging}"
 
                         nexusArtifactUploader(
                             nexusVersion: NEXUS_VERSION,
@@ -81,14 +88,12 @@ pipeline {
                             repository: NEXUS_REPOSITORY,
                             credentialsId: NEXUS_CREDENTIAL_ID,
                             artifacts: [
-                                // Main artifact (.jar / .war / etc)
                                 [
                                     artifactId: pom.artifactId,
                                     classifier: '',
                                     file: mainArtifact.path,
                                     type: pom.packaging
                                 ],
-                                // POM file (very useful for transitive dependencies)
                                 [
                                     artifactId: pom.artifactId,
                                     classifier: '',
@@ -98,7 +103,7 @@ pipeline {
                             ]
                         )
                     } else {
-                        error "No artifact found in ${ARTIFACT_DIR} with packaging ${pom.packaging}"
+                        error "Main artifact not found → ${ARTIFACT_DIR}/*.${pom.packaging}"
                     }
                 }
             }
@@ -107,14 +112,13 @@ pipeline {
 
     post {
         always {
-            // Optional: clean workspace to save disk space
-            cleanWs()
+            cleanWs()  // clean workspace to save disk space
         }
         success {
-            echo "Pipeline completed successfully! Artifact published to Nexus."
+            echo "Pipeline SUCCESS ✓ Artifact published to Nexus!"
         }
         failure {
-            echo "Pipeline failed. Check logs for details."
+            echo "Pipeline FAILED ✗ Check console output for details."
         }
     }
 }
