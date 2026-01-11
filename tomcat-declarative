@@ -1,121 +1,147 @@
-// Scripted Pipeline (Jenkinsfile)
-
-node {
-    // Global variables (shared across stages)
-    def artifactPath = ''
-    def pomGroupId = ''
-    def pomArtifactId = ''
-    def pomVersion = ''
-    def pomPackaging = ''
-
-    try {
-        stage('Git Clone') {
-            git branch: 'feature-1.1',
-                url: 'https://github.com/betawins/sabear_simplecutomerapp.git'
-        }
-
-        stage('SonarQube Analysis') {
-            withSonarQubeEnv('sonar') {  // must match SonarQube server name in Jenkins config
-                def scannerHome = tool 'sonar-scanner'
-                sh """
-                    ${scannerHome}/bin/sonar-scanner \
-                    -Dsonar.projectKey=Ncodeit \
-                    -Dsonar.projectName=Ncodeit \
-                    -Dsonar.projectVersion=2.0 \
-                    -Dsonar.sources=/var/lib/jenkins/workspace/${env.JOB_NAME}/src/ \
-                    -Dsonar.binaries=target/classes/com/visualpathit/account/controller/ \
-                    -Dsonar.junit.reportsPath=target/surefire-reports \
-                    -Dsonar.jacoco.reportPath=target/jacoco.exec \
-                    -Dsonar.java.binaries=src/com/room/sample
-                """
+pipeline {
+    agent any
+   
+    tools {
+        maven "MVN_HOME"
+    }
+   
+    environment {
+        // Nexus Configuration
+        NEXUS_VERSION = "nexus3"
+        NEXUS_PROTOCOL = "http"
+        NEXUS_URL = '15.207.103.131:8081'
+        NEXUS_REPOSITORY = 'simple_customerapp'     // your current snapshot repo
+        NEXUS_CREDENTIAL_ID = 'nexus-server'
+        SCANNER_HOME = tool 'sonar-scanner'
+        
+        // Tomcat Deployment Configuration
+        TOMCAT_URL = 'http://13.202.46.203:8080'
+        TOMCAT_CREDENTIALS_ID = 'tomcat_new'   // ← IMPORTANT: Create this credential in Jenkins!
+        APP_CONTEXT = 'SimpleCustomerApp'           // → app will be available at http://...:8080/SimpleCustomerApp
+        
+        // Variables to share between stages (will be set in nexus stage)
+        ARTIFACT_PATH = ''
+        POM_GROUP_ID = ''
+        POM_ARTIFACT_ID = ''
+        POM_VERSION = ''
+        POM_PACKAGING = ''
+    }
+   
+    stages {
+        stage('Clone Repository') {
+            steps {
+                git 'https://github.com/betawins/sabear_simplecutomerapp.git'
             }
         }
-
-        stage('Maven Compilation & Package') {
-            withMaven(jdk: 'MVN_HOME') {  // optional: use if you have Maven configured this way
+       
+        stage('Maven Build') {
+            steps {
                 sh 'mvn -Dmaven.test.failure.ignore=true clean install'
             }
         }
-
+       
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                    sh """
+                        \$SCANNER_HOME/bin/sonar-scanner \\
+                        -Dsonar.projectKey=Ncodeit \\
+                        -Dsonar.projectName=Ncodeit \\
+                        -Dsonar.projectVersion=2.0 \\
+                        -Dsonar.sources=/var/lib/jenkins/workspace/\$JOB_NAME/src/ \\
+                        -Dsonar.binaries=target/classes/com/visualpathit/account/controller/ \\
+                        -Dsonar.junit.reportsPath=target/surefire-reports \\
+                        -Dsonar.jacoco.reportPath=target/jacoco.exec \\
+                        -Dsonar.java.binaries=src/com/room/sample
+                    """
+                }
+            }
+        }
+       
         stage('Publish to Nexus') {
-            // Extract POM values
-            pomGroupId = sh(script: "mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout", returnStdout: true).trim()
-            pomArtifactId = sh(script: "mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout", returnStdout: true).trim()
-            pomVersion = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
-            pomPackaging = sh(script: "mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout", returnStdout: true).trim()
-
-            artifactPath = sh(script: "ls target/*.${pomPackaging} | head -n 1", returnStdout: true).trim()
-
-            if (fileExists(artifactPath)) {
-                echo "Uploading artifact: ${artifactPath}"
-                echo "Group: ${pomGroupId} | Artifact: ${pomArtifactId} | Version: ${pomVersion} | Type: ${pomPackaging}"
-
-                nexusArtifactUploader(
-                    nexusVersion: 'nexus3',
-                    protocol: 'http',
-                    nexusUrl: '15.207.103.131:8081',
-                    groupId: pomGroupId,
-                    version: pomVersion,
-                    repository: 'simple_customerapp',
-                    credentialsId: 'nexus-server',
-                    artifacts: [
-                        [artifactId: pomArtifactId, classifier: '', file: artifactPath, type: pomPackaging],
-                        [artifactId: pomArtifactId, classifier: '', file: 'pom.xml', type: 'pom']
-                    ]
-                )
-            } else {
-                error "Main artifact not found: target/*.${pomPackaging}"
+            steps {
+                script {
+                    // Extract POM information
+                    POM_GROUP_ID = sh(script: "mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout", returnStdout: true).trim()
+                    POM_ARTIFACT_ID = sh(script: "mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout", returnStdout: true).trim()
+                    POM_VERSION = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
+                    POM_PACKAGING = sh(script: "mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout", returnStdout: true).trim()
+                    
+                    // Find the main artifact file
+                    ARTIFACT_PATH = sh(script: "ls target/*.${POM_PACKAGING} | head -n 1", returnStdout: true).trim()
+                    
+                    if (ARTIFACT_PATH && fileExists(ARTIFACT_PATH)) {
+                        echo "*** Uploading artifact: ${ARTIFACT_PATH}"
+                        echo "→ Group: ${POM_GROUP_ID}"
+                        echo "→ Artifact: ${POM_ARTIFACT_ID}"
+                        echo "→ Version: ${POM_VERSION}"
+                        echo "→ Packaging: ${POM_PACKAGING}"
+                        
+                        nexusArtifactUploader(
+                            nexusVersion: NEXUS_VERSION,
+                            protocol: NEXUS_PROTOCOL,
+                            nexusUrl: NEXUS_URL,
+                            groupId: POM_GROUP_ID,
+                            version: POM_VERSION,
+                            repository: NEXUS_REPOSITORY,
+                            credentialsId: NEXUS_CREDENTIAL_ID,
+                            artifacts: [
+                                [artifactId: POM_ARTIFACT_ID, classifier: '', file: ARTIFACT_PATH, type: POM_PACKAGING],
+                                [artifactId: POM_ARTIFACT_ID, classifier: '', file: "pom.xml", type: "pom"]
+                            ]
+                        )
+                    } else {
+                        error "Artifact not found in target/ with packaging ${POM_PACKAGING}"
+                    }
+                }
             }
         }
-
-        stage('Slack Notification') {
-            // Simple success notification (you can customize with build status)
-            slackSend(
-                color: '#00FF00',
-                message: "Build *SUCCESS* - ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
-                         "Branch: feature-1.1\n" +
-                         "Nexus: ${pomArtifactId}-${pomVersion}.${pomPackaging} uploaded\n" +
-                         "More info: ${env.BUILD_URL}"
-            )
-        }
-
+        
         stage('Deploy to Tomcat') {
-            withCredentials([usernamePassword(
-                credentialsId: 'tomcat_credentials',
-                usernameVariable: 'TOMCAT_USR',
-                passwordVariable: 'TOMCAT_PSW'
-            )]) {
-                // Undeploy old version (ignore failure)
-                sh """
-                    curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
-                         --fail --silent \
-                         "http://13.202.46.203:8080/manager/text/undeploy?path=/SimpleCustomerApp" \
-                         || echo "No previous deployment found - continuing"
-                """
-
-                // Deploy new version
-                sh """
-                    curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
-                         --fail \
-                         --upload-file ${artifactPath} \
-                         "http://13.202.46.203:8080/manager/text/deploy?path=/SimpleCustomerApp&update=true"
-                """
-
-                echo "Deployment completed!"
-                echo "Application available at: http://13.202.46.203:8080/SimpleCustomerApp"
+            when {
+                expression { currentBuild.result == null || currentBuild.result == 'SUCCESS' }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: TOMCAT_CREDENTIALS_ID,
+                    usernameVariable: 'TOMCAT_USR',
+                    passwordVariable: 'TOMCAT_PSW'
+                )]) {
+                    script {
+                        // 1. Undeploy previous version (safe to fail if not exists)
+                        sh """
+                            curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
+                                 --fail --silent \
+                                 "${TOMCAT_URL}/manager/text/undeploy?path=/${APP_CONTEXT}" \
+                                 || echo "No previous deployment or undeploy failed - continuing"
+                        """
+                        
+                        // 2. Deploy new WAR
+                        sh """
+                            curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
+                                 --fail \
+                                 --upload-file ${ARTIFACT_PATH} \
+                                 "${TOMCAT_URL}/manager/text/deploy?path=/${APP_CONTEXT}&update=true"
+                        """
+                        
+                        echo "Deployment completed successfully!"
+                        echo "Application should be available at:"
+                        echo "${TOMCAT_URL}/${APP_CONTEXT}"
+                    }
+                }
             }
         }
-
-    } catch (Exception e) {
-        currentBuild.result = 'FAILURE'
-        slackSend(
-            color: '#FF0000',
-            message: "Build *FAILED* - ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
-                     "Error: ${e.getMessage()}\n" +
-                     "Check console: ${env.BUILD_URL}console"
-        )
-        throw e
-    } finally {
-        cleanWs()
+    }
+    
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo "Pipeline completed successfully! Application deployed to Tomcat."
+        }
+        failure {
+            echo "Pipeline failed. Please check console logs."
+        }
     }
 }
