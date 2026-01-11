@@ -19,7 +19,7 @@ pipeline {
     }
     
     stages {
-        stage("clone code") {
+        stage('Clone Repository') {
             steps {
                 script {
                     // Let's clone the source
