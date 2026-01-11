@@ -1,7 +1,8 @@
-// Scripted Pipeline (Jenkinsfile)
-
 node {
-    // Global variables (shared across stages)
+    // Fetch Maven tool path once (like in declarative tools block)
+    def mavenHome = tool name: 'MVN_HOME', type: 'maven'  // 'MVN_HOME' must match exact name in Global Tool Configuration
+    
+    // Global variables
     def artifactPath = ''
     def pomGroupId = ''
     def pomArtifactId = ''
@@ -15,7 +16,7 @@ node {
         }
 
         stage('SonarQube Analysis') {
-            withSonarQubeEnv('sonar') {  // must match SonarQube server name in Jenkins config
+            withSonarQubeEnv('sonar') {
                 def scannerHome = tool 'sonar-scanner'
                 sh """
                     ${scannerHome}/bin/sonar-scanner \
@@ -32,17 +33,16 @@ node {
         }
 
         stage('Maven Compilation & Package') {
-            withMaven(jdk: 'MVN_HOME') {  // optional: use if you have Maven configured this way
-                sh 'mvn -Dmaven.test.failure.ignore=true clean install'
-            }
+            // Use full path to mvn from the tool
+            sh "${mavenHome}/bin/mvn -Dmaven.test.failure.ignore=true clean install"
         }
 
         stage('Publish to Nexus') {
-            // Extract POM values
-            pomGroupId = sh(script: "mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout", returnStdout: true).trim()
-            pomArtifactId = sh(script: "mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout", returnStdout: true).trim()
-            pomVersion = sh(script: "mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
-            pomPackaging = sh(script: "mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout", returnStdout: true).trim()
+            // Extract POM values using Maven
+            pomGroupId = sh(script: "${mavenHome}/bin/mvn help:evaluate -Dexpression=project.groupId -q -DforceStdout", returnStdout: true).trim()
+            pomArtifactId = sh(script: "${mavenHome}/bin/mvn help:evaluate -Dexpression=project.artifactId -q -DforceStdout", returnStdout: true).trim()
+            pomVersion = sh(script: "${mavenHome}/bin/mvn help:evaluate -Dexpression=project.version -q -DforceStdout", returnStdout: true).trim()
+            pomPackaging = sh(script: "${mavenHome}/bin/mvn help:evaluate -Dexpression=project.packaging -q -DforceStdout", returnStdout: true).trim()
 
             artifactPath = sh(script: "ls target/*.${pomPackaging} | head -n 1", returnStdout: true).trim()
 
@@ -69,7 +69,6 @@ node {
         }
 
         stage('Slack Notification') {
-            // Simple success notification (you can customize with build status)
             slackSend(
                 color: '#00FF00',
                 message: "Build *SUCCESS* - ${env.JOB_NAME} #${env.BUILD_NUMBER}\n" +
@@ -85,7 +84,6 @@ node {
                 usernameVariable: 'TOMCAT_USR',
                 passwordVariable: 'TOMCAT_PSW'
             )]) {
-                // Undeploy old version (ignore failure)
                 sh """
                     curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
                          --fail --silent \
@@ -93,7 +91,6 @@ node {
                          || echo "No previous deployment found - continuing"
                 """
 
-                // Deploy new version
                 sh """
                     curl --user \${TOMCAT_USR}:\${TOMCAT_PSW} \
                          --fail \
